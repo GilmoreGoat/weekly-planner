@@ -1,7 +1,18 @@
 # Core
-anthropic>=0.40.0
 streamlit>=1.35.0
 python-dotenv>=1.0.0
+
+# LLM providers — install only what you need
+# OpenAI (GPT-4o, GPT-4-turbo, etc.)
+openai>=1.30.0
+
+# Anthropic (Claude Sonnet, Haiku, etc.)
+anthropic>=0.40.0
+
+# Google Gemini (1.5 Pro, Flash, etc.)
+google-generativeai>=0.7.0
+
+# Ollama uses Python's stdlib urllib — no extra package needed
 
 # Instagram scraping
 instaloader>=4.11
@@ -19,5 +30,5 @@ google-auth>=2.29.0
 google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
 
-# Date parsing (optional but recommended)
+# Date parsing
 python-dateutil>=2.9.0

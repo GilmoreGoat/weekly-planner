@@ -1,7 +1,6 @@
 """
 Weekly Planner — Streamlit Dashboard
-
-Tabs: Schedule | Tasks | Events | Summary
+Supports OpenAI, Anthropic, Google Gemini, and Ollama (local).
 """
 
 import json
@@ -9,19 +8,14 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-# ---------------------------------------------------------------------------
-# Page config
-# ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Weekly Planner",
     page_icon="🗓️",
@@ -30,59 +24,116 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Sidebar — configuration
+# Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.title("🗓️ Weekly Planner")
     st.markdown("---")
 
-    st.subheader("⚙️ Configuration")
+    # ── LLM Provider ────────────────────────────────────────────────────
+    st.subheader("🤖 AI Provider")
 
-    anthropic_key = st.text_input(
-        "Anthropic API Key",
-        value=os.environ.get("ANTHROPIC_API_KEY", ""),
-        type="password",
-        help="Your Anthropic API key for Claude",
+    provider = st.selectbox(
+        "Provider",
+        options=["openai", "anthropic", "gemini", "ollama"],
+        format_func=lambda p: {
+            "openai":    "OpenAI  (GPT-4o, GPT-4-turbo…)",
+            "anthropic": "Anthropic  (Claude Sonnet, Haiku…)",
+            "gemini":    "Google Gemini  (1.5 Pro, Flash…)",
+            "ollama":    "Ollama  (local — no API key needed)",
+        }[p],
+        index=["openai", "anthropic", "gemini", "ollama"].index(
+            os.environ.get("LLM_PROVIDER", "openai")
+        ),
+        help="Choose which AI service generates your weekly plan.",
     )
+
+    DEFAULT_MODELS = {
+        "openai":    ["gpt-4o", "gpt-4-turbo", "gpt-4o-mini", "gpt-3.5-turbo"],
+        "anthropic": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
+        "gemini":    ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"],
+        "ollama":    ["llama3", "llama3:70b", "mistral", "phi3", "gemma2"],
+    }
+    ENV_KEYS = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "ollama": "",
+    }
+
+    llm_model = st.selectbox(
+        "Model",
+        options=DEFAULT_MODELS[provider],
+        index=0,
+        help="Model to use. You can also type a custom model name below.",
+    )
+    custom_model = st.text_input(
+        "Custom model name (optional)",
+        placeholder="e.g. gpt-4-turbo-preview",
+        help="Overrides the selection above if filled in.",
+    )
+    final_model = custom_model.strip() if custom_model.strip() else llm_model
+
+    if provider == "ollama":
+        llm_api_key = ""
+        ollama_url = st.text_input(
+            "Ollama base URL",
+            value=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+            help="URL of your local Ollama server.",
+        )
+        st.caption("No API key needed for Ollama.")
+    else:
+        env_key_name = ENV_KEYS[provider]
+        llm_api_key = st.text_input(
+            f"{provider.capitalize()} API Key",
+            value=os.environ.get(env_key_name, ""),
+            type="password",
+            help=f"Get your key from the {provider.capitalize()} console.",
+        )
+        ollama_url = "http://localhost:11434"
+
+        KEY_LINKS = {
+            "openai":    "https://platform.openai.com/api-keys",
+            "anthropic": "https://console.anthropic.com/",
+            "gemini":    "https://aistudio.google.com/app/apikey",
+        }
+        st.caption(f"[Get a {provider.capitalize()} API key →]({KEY_LINKS[provider]})")
+
+    st.markdown("---")
+
+    # ── Other integrations ───────────────────────────────────────────────
+    st.subheader("⚙️ Integrations")
 
     canvas_token = st.text_input(
         "Canvas API Token",
         value=os.environ.get("CANVAS_API_TOKEN", ""),
         type="password",
-        help="Your Canvas API token (Account → Settings → Approved Integrations)",
+        help="Account → Settings → Approved Integrations → New Access Token",
     )
-
     canvas_base_url = st.text_input(
         "Canvas Base URL",
         value=os.environ.get("CANVAS_BASE_URL", ""),
-        placeholder="https://canvas.yourschool.edu",
-        help="Your school's Canvas domain (e.g. canvas.ucsd.edu)",
+        placeholder="https://canvas.ucsd.edu",
     )
-
     canvas_mcp_url = st.text_input(
         "Canvas MCP URL (optional)",
         value=os.environ.get("CANVAS_MCP_URL", ""),
         placeholder="https://ucsd-canvas-server.onrender.com",
-        help="Base URL of a Canvas MCP SSE server. Leave blank to use Canvas REST API directly.",
     )
 
     notion_token = st.text_input(
         "Notion API Key",
         value=os.environ.get("NOTION_API_KEY", ""),
         type="password",
-        help="Your Notion integration token",
     )
-
     notion_page_id = st.text_input(
         "Notion Parent Page ID",
         value=os.environ.get("NOTION_PARENT_PAGE_ID", ""),
-        help="The Notion page ID where the weekly plan will be created",
     )
 
     ig_username = st.text_input(
         "Instagram Username (optional)",
         value=os.environ.get("IG_USERNAME", ""),
-        help="For authenticated scraping (higher rate limits)",
     )
     ig_password = st.text_input(
         "Instagram Password (optional)",
@@ -93,16 +144,16 @@ with st.sidebar:
     user_timezone = st.text_input(
         "Timezone",
         value=os.environ.get("TIMEZONE", "America/Los_Angeles"),
-        help="IANA timezone name for Google Calendar events (e.g. America/New_York, Europe/London)",
+        help="IANA timezone e.g. America/New_York, Europe/London",
     )
 
     st.markdown("---")
     st.subheader("📤 Outputs")
-    enable_notion = st.checkbox("Create Notion page", value=True)
-    enable_gcal = st.checkbox("Add to Google Calendar", value=True)
+    enable_notion = st.checkbox("Create Notion page", value=bool(notion_token and notion_page_id))
+    enable_gcal   = st.checkbox("Add to Google Calendar", value=True)
 
     st.markdown("---")
-    st.caption("Powered by Claude Sonnet 4.6")
+    st.caption(f"Provider: **{provider}** / {final_model}")
 
 
 # ---------------------------------------------------------------------------
@@ -110,73 +161,60 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 st.title("🗓️ Weekly Planner")
 st.markdown(
-    "Upload your **weekly_notes.txt**, configure your API keys in the sidebar, then click **Run**."
+    "Upload your **weekly_notes.txt**, choose an AI provider in the sidebar, then click **Run**."
 )
 
 col1, col2 = st.columns([2, 1])
-
 with col1:
-    notes_file = st.file_uploader(
-        "Upload weekly_notes.txt",
-        type=["txt", "md"],
-        help="A text or markdown file with your goals, reminders, and personal appointments",
-    )
-
+    notes_file = st.file_uploader("Upload weekly_notes.txt", type=["txt", "md"])
 with col2:
-    accounts_file = st.file_uploader(
-        "Upload accounts.json (optional)",
-        type=["json"],
-        help="JSON file with Instagram handles to scrape",
-    )
+    accounts_file = st.file_uploader("Upload accounts.json (optional)", type=["json"])
 
-# Show a preview of the notes
 if notes_file:
     with st.expander("Preview notes file", expanded=False):
         st.text(notes_file.read().decode("utf-8"))
         notes_file.seek(0)
 
 st.markdown("---")
-
 run_button = st.button("▶️  Run Weekly Planner", type="primary", use_container_width=True)
 
-# ---------------------------------------------------------------------------
-# State management
-# ---------------------------------------------------------------------------
-if "plan" not in st.session_state:
-    st.session_state.plan = None
-if "notion_url" not in st.session_state:
-    st.session_state.notion_url = None
-if "gcal_events" not in st.session_state:
-    st.session_state.gcal_events = []
-if "errors" not in st.session_state:
-    st.session_state.errors = []
+# Session state
+for key in ("plan", "notion_url", "gcal_events", "errors"):
+    if key not in st.session_state:
+        st.session_state[key] = None if key in ("plan", "notion_url") else []
 
 # ---------------------------------------------------------------------------
 # Run pipeline
 # ---------------------------------------------------------------------------
 if run_button:
-    if not anthropic_key:
-        st.error("Please enter your Anthropic API key in the sidebar.")
+    if provider != "ollama" and not llm_api_key:
+        st.error(f"Please enter your {provider.capitalize()} API key in the sidebar.")
         st.stop()
 
-    os.environ["ANTHROPIC_API_KEY"] = anthropic_key
+    # Build the LLM client
+    try:
+        from src.llm_client import LLMClient
+        llm_client = LLMClient.from_sidebar(
+            provider=provider,
+            api_key=llm_api_key,
+            model=final_model,
+            ollama_url=ollama_url,
+        )
+    except Exception as e:
+        st.error(f"Failed to initialise {provider} client: {e}")
+        st.stop()
 
     st.session_state.errors = []
-    progress = st.progress(0, text="Starting...")
+    progress = st.progress(0, text="Starting…")
     status = st.empty()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Save uploaded files to temp dir
         notes_path = Path(tmpdir) / "weekly_notes.txt"
         if notes_file:
             notes_path.write_bytes(notes_file.read())
         else:
-            # Use default if it exists
             default = Path("weekly_notes.txt")
-            if default.exists():
-                notes_path.write_text(default.read_text())
-            else:
-                notes_path.write_text("# Weekly Notes\n\n## Goals\n\n## Reminders\n")
+            notes_path.write_text(default.read_text() if default.exists() else "# Weekly Notes\n\n## Goals\n\n## Reminders\n")
 
         accounts_path = "accounts.json"
         if accounts_file:
@@ -184,9 +222,9 @@ if run_button:
             tmp_accounts.write_bytes(accounts_file.read())
             accounts_path = str(tmp_accounts)
 
-        # ── Step 1: Parse notes ──────────────────────────────────────────
-        status.info("📝 Parsing weekly notes...")
-        progress.progress(10, text="Parsing notes...")
+        # Step 1 — Notes
+        status.info("📝 Parsing weekly notes…")
+        progress.progress(10, text="Parsing notes…")
         from src.notes_parser import run as parse_notes
         try:
             notes_data = parse_notes(str(notes_path))
@@ -194,77 +232,66 @@ if run_button:
             notes_data = {"goals": [], "reminders": [], "all_items": []}
             st.session_state.errors.append(f"Notes parse error: {e}")
 
-        # ── Step 2: Canvas ───────────────────────────────────────────────
-        status.info("📚 Fetching Canvas assignments...")
-        progress.progress(25, text="Fetching Canvas assignments...")
-        # Allow sidebar fields to override env vars for this session
+        # Step 2 — Canvas
+        status.info("📚 Fetching Canvas assignments…")
+        progress.progress(25, text="Fetching Canvas…")
         if canvas_mcp_url:
             os.environ["CANVAS_MCP_URL"] = canvas_mcp_url
         if canvas_base_url:
             os.environ["CANVAS_BASE_URL"] = canvas_base_url
         from src.canvas_integration import run as fetch_canvas
         try:
-            canvas_events = fetch_canvas(
-                canvas_token=canvas_token or None,
-                canvas_base_url=canvas_base_url or None,
-            )
+            canvas_events = fetch_canvas(canvas_token=canvas_token or None, canvas_base_url=canvas_base_url or None)
         except Exception as e:
             canvas_events = []
             st.session_state.errors.append(f"Canvas error: {e}")
 
-        # ── Step 3: Instagram ────────────────────────────────────────────
-        status.info("📸 Scraping Instagram posts...")
-        progress.progress(45, text="Scraping Instagram...")
+        # Step 3 — Instagram
+        status.info("📸 Scraping Instagram posts…")
+        progress.progress(45, text="Scraping Instagram…")
         from src.instagram_scraper import run as scrape_instagram
         try:
             instagram_events = scrape_instagram(
                 accounts_file=accounts_path,
                 ig_username=ig_username or None,
                 ig_password=ig_password or None,
+                llm_client=llm_client,
             )
         except Exception as e:
             instagram_events = []
             st.session_state.errors.append(f"Instagram error: {e}")
 
-        # ── Step 4: Orchestrate ──────────────────────────────────────────
-        status.info("🤖 Claude is building your weekly plan...")
-        progress.progress(65, text="Claude orchestrating plan...")
+        # Step 4 — Orchestrate
+        status.info(f"🤖 {provider.capitalize()} is building your weekly plan…")
+        progress.progress(65, text="Generating plan…")
         from src.orchestrator import run as orchestrate
         try:
-            plan = orchestrate(instagram_events, canvas_events, notes_data)
+            plan = orchestrate(instagram_events, canvas_events, notes_data, llm_client=llm_client)
             st.session_state.plan = plan
         except Exception as e:
             st.session_state.errors.append(f"Orchestration error: {e}")
             st.error(f"Failed to generate plan: {e}")
             st.stop()
 
-        # ── Step 5: Notion ───────────────────────────────────────────────
+        # Step 5 — Notion
         if enable_notion and notion_token and notion_page_id:
-            status.info("📓 Creating Notion page...")
-            progress.progress(80, text="Creating Notion page...")
+            status.info("📓 Creating Notion page…")
+            progress.progress(80, text="Creating Notion page…")
             from src.notion_output import run as create_notion
             try:
-                notion_url = create_notion(
-                    plan,
-                    notion_token=notion_token,
-                    parent_page_id=notion_page_id,
-                )
-                st.session_state.notion_url = notion_url
+                st.session_state.notion_url = create_notion(plan, notion_token=notion_token, parent_page_id=notion_page_id)
             except Exception as e:
                 st.session_state.errors.append(f"Notion error: {e}")
         elif enable_notion:
-            st.session_state.errors.append(
-                "Notion skipped: missing API key or parent page ID"
-            )
+            st.session_state.errors.append("Notion skipped: missing API key or parent page ID")
 
-        # ── Step 6: Google Calendar ──────────────────────────────────────
+        # Step 6 — Google Calendar
         if enable_gcal:
-            status.info("📅 Adding events to Google Calendar...")
-            progress.progress(92, text="Adding to Google Calendar...")
+            status.info("📅 Adding events to Google Calendar…")
+            progress.progress(92, text="Adding to Google Calendar…")
             from src.gcal_output import run as add_gcal
             try:
-                gcal_events = add_gcal(plan, timezone=user_timezone or None)
-                st.session_state.gcal_events = gcal_events
+                st.session_state.gcal_events = add_gcal(plan, timezone=user_timezone or None)
             except Exception as e:
                 st.session_state.errors.append(f"Google Calendar error: {e}")
 
@@ -277,7 +304,6 @@ if run_button:
 if st.session_state.plan:
     plan = st.session_state.plan
 
-    # Output links
     out_col1, out_col2 = st.columns(2)
     with out_col1:
         if st.session_state.notion_url:
@@ -286,18 +312,15 @@ if st.session_state.plan:
         if st.session_state.gcal_events:
             st.success(f"📅 {len(st.session_state.gcal_events)} events added to Google Calendar")
 
-    # Errors
     if st.session_state.errors:
         with st.expander("⚠️ Warnings / Errors", expanded=False):
             for err in st.session_state.errors:
                 st.warning(err)
 
-    # Tabs
     tab_schedule, tab_tasks, tab_events, tab_summary, tab_raw = st.tabs(
         ["📅 Schedule", "✅ Tasks", "🎉 Events", "📋 Summary", "🔍 Raw JSON"]
     )
 
-    # ── Schedule tab ────────────────────────────────────────────────────
     with tab_schedule:
         st.subheader("This Week's Schedule")
         schedule = plan.get("schedule", [])
@@ -306,78 +329,48 @@ if st.session_state.plan:
         else:
             for item in schedule:
                 priority = item.get("priority", 3)
-                colors = {1: "🔴", 2: "🟠", 3: "🟡", 4: "🟢"}
-                emoji = colors.get(priority, "⚪")
-
+                emoji = {1: "🔴", 2: "🟠", 3: "🟡", 4: "🟢"}.get(priority, "⚪")
                 with st.container():
                     col_a, col_b = st.columns([3, 1])
                     with col_a:
                         title = item.get("title", "Untitled")
                         link = item.get("link")
-                        if link:
-                            st.markdown(f"### {emoji} [{title}]({link})")
-                        else:
-                            st.markdown(f"### {emoji} {title}")
-
-                        meta_parts = []
+                        st.markdown(f"### {emoji} [{title}]({link})" if link else f"### {emoji} {title}")
+                        meta = []
                         if item.get("date"):
-                            time_part = f" at {item['time']}" if item.get("time") else ""
-                            meta_parts.append(f"📆 {item['date']}{time_part}")
+                            meta.append(f"📆 {item['date']}" + (f" at {item['time']}" if item.get("time") else ""))
                         if item.get("location"):
-                            meta_parts.append(f"📍 {item['location']}")
+                            meta.append(f"📍 {item['location']}")
                         if item.get("source"):
-                            meta_parts.append(f"🏷️ {item['source']}")
-                        if meta_parts:
-                            st.caption("  ·  ".join(meta_parts))
+                            meta.append(f"🏷️ {item['source']}")
+                        if meta:
+                            st.caption("  ·  ".join(meta))
                         if item.get("description"):
                             st.markdown(item["description"])
-
                     with col_b:
-                        label = item.get("priority_label", "medium")
-                        st.markdown(f"**Priority:** `{label}`")
-                        st.markdown(f"**Type:** `{item.get('type', 'event')}`")
-
+                        st.markdown(f"**Priority:** `{item.get('priority_label','medium')}`")
+                        st.markdown(f"**Type:** `{item.get('type','event')}`")
                 st.markdown("---")
 
-    # ── Tasks tab ───────────────────────────────────────────────────────
     with tab_tasks:
         st.subheader("Tasks & To-Dos")
         tasks = plan.get("tasks", [])
         if not tasks:
             st.info("No tasks found.")
         else:
-            # Group by category
-            categories: dict[str, list] = {}
+            categories: dict = {}
             for task in tasks:
-                cat = task.get("category", "other")
-                categories.setdefault(cat, []).append(task)
-
-            cat_emojis = {
-                "academic": "📚",
-                "personal": "👤",
-                "reminder": "🔔",
-                "goal": "🎯",
-                "other": "📌",
-            }
-
+                categories.setdefault(task.get("category", "other"), []).append(task)
+            cat_emojis = {"academic": "📚", "personal": "👤", "reminder": "🔔", "goal": "🎯", "other": "📌"}
             for cat, cat_tasks in categories.items():
-                emoji = cat_emojis.get(cat, "📌")
-                st.markdown(f"#### {emoji} {cat.capitalize()}")
+                st.markdown(f"#### {cat_emojis.get(cat,'📌')} {cat.capitalize()}")
                 for task in cat_tasks:
-                    priority = task.get("priority", 3)
-                    p_colors = {1: "🔴", 2: "🟠", 3: "🟡", 4: "🟢"}
-                    p_emoji = p_colors.get(priority, "⚪")
+                    p_emoji = {1:"🔴",2:"🟠",3:"🟡",4:"🟢"}.get(task.get("priority",3),"⚪")
+                    due = task.get("due_date","")
+                    st.markdown(f"- {p_emoji} **{task.get('title','Untitled')}**" + (f" — due {due}" if due else ""))
+                    if task.get("notes"):
+                        st.caption(f"  ↳ {task['notes']}")
 
-                    due = task.get("due_date", "")
-                    due_str = f" — due {due}" if due else ""
-                    notes = task.get("notes", "")
-
-                    st.markdown(f"- {p_emoji} **{task.get('title', 'Untitled')}**{due_str}")
-                    if notes:
-                        st.caption(f"  ↳ {notes}")
-                st.markdown("")
-
-    # ── Events tab ──────────────────────────────────────────────────────
     with tab_events:
         st.subheader("Campus & Social Events")
         events = plan.get("events", [])
@@ -385,36 +378,21 @@ if st.session_state.plan:
             st.info("No events found.")
         else:
             for event in events:
-                with st.container():
-                    title = event.get("title", "Untitled")
-                    link = event.get("link")
-                    if link:
-                        st.markdown(f"### 🎪 [{title}]({link})")
-                    else:
-                        st.markdown(f"### 🎪 {title}")
+                title = event.get("title", "Untitled")
+                link = event.get("link")
+                st.markdown(f"### 🎪 [{title}]({link})" if link else f"### 🎪 {title}")
+                meta = []
+                if event.get("date"):   meta.append(f"📆 {event['date']}")
+                if event.get("location"): meta.append(f"📍 {event['location']}")
+                if event.get("source"):  meta.append(f"🏷️ {event['source']}")
+                if meta: st.caption("  ·  ".join(meta))
+                if event.get("description"): st.write(event["description"])
+                st.markdown("---")
 
-                    meta = []
-                    if event.get("date"):
-                        meta.append(f"📆 {event['date']}")
-                    if event.get("location"):
-                        meta.append(f"📍 {event['location']}")
-                    if event.get("source"):
-                        meta.append(f"🏷️ {event['source']}")
-                    if meta:
-                        st.caption("  ·  ".join(meta))
-                    if event.get("description"):
-                        st.write(event["description"])
-                    st.markdown("---")
-
-    # ── Summary tab ─────────────────────────────────────────────────────
     with tab_summary:
         st.subheader("Weekly Summary")
         summary = plan.get("summary", "")
-        if summary:
-            st.markdown(summary)
-        else:
-            st.info("No summary generated.")
-
+        st.markdown(summary) if summary else st.info("No summary generated.")
         st.markdown("---")
         st.subheader("Stats")
         m1, m2, m3, m4 = st.columns(4)
@@ -424,7 +402,6 @@ if st.session_state.plan:
         if st.session_state.gcal_events:
             m4.metric("Added to GCal", len(st.session_state.gcal_events))
 
-    # ── Raw JSON tab ─────────────────────────────────────────────────────
     with tab_raw:
         st.subheader("Raw Plan JSON")
         st.json(plan)
